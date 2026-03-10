@@ -8,7 +8,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import firewallRoutes from "./routes/firewalls";
 import monitorRoutes from "./routes/monitor";
-import { getDb } from "./database";
+import "./database"; // Initialize JSON DB file
 
 dotenv.config();
 
@@ -34,9 +34,8 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// Initialize DB and start server
-getDb();
-console.log("Database initialized");
+// Database auto-initializes on import
+console.log("Database initialized (JSON file)");
 
 app.listen(PORT, () => {
   console.log(`\n🛡️  FortiGate Monitor Backend running on http://localhost:${PORT}`);

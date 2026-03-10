@@ -16,6 +16,7 @@ build/
 # Database
 *.db
 *.sqlite
+data.json
 
 # IDE
 .vscode/

@@ -1,11 +1,18 @@
 /**
  * Firewall CRUD routes.
- * Manages FortiGate devices in the local SQLite database.
+ * Manages FortiGate devices in a local JSON file database.
  */
 
 import { Router, Request, Response } from "express";
 import { v4 as uuidv4 } from "uuid";
-import { getDb, FirewallRecord } from "../database";
+import {
+  getAllFirewalls,
+  getFirewallById,
+  insertFirewall,
+  updateFirewallRecord,
+  deleteFirewallRecord,
+  FirewallRecord,
+} from "../database";
 import { FortiGateClient } from "../services/fortigate";
 import { cache } from "../services/cache";
 
@@ -13,8 +20,7 @@ const router = Router();
 
 // GET /api/firewalls - List all firewalls
 router.get("/", (_req: Request, res: Response) => {
-  const db = getDb();
-  const firewalls = db.prepare("SELECT * FROM firewalls ORDER BY created_at DESC").all() as FirewallRecord[];
+  const firewalls = getAllFirewalls();
   // Never send tokens to the frontend
   const safe = firewalls.map(({ api_token, ...fw }) => ({
     ...fw,
@@ -25,8 +31,7 @@ router.get("/", (_req: Request, res: Response) => {
 
 // GET /api/firewalls/:id - Get single firewall
 router.get("/:id", (req: Request, res: Response) => {
-  const db = getDb();
-  const fw = db.prepare("SELECT * FROM firewalls WHERE id = ?").get(req.params.id) as FirewallRecord | undefined;
+  const fw = getFirewallById(req.params.id);
   if (!fw) return res.status(404).json({ error: "Firewall not found" });
   const { api_token, ...safe } = fw;
   res.json({ ...safe, hasToken: true });
@@ -51,10 +56,17 @@ router.post("/", async (req: Request, res: Response) => {
   }
 
   const id = uuidv4();
-  const db = getDb();
-  db.prepare(
-    "INSERT INTO firewalls (id, name, host, port, api_token, verify_ssl) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(id, name, host, port, apiToken, verifySsl ? 1 : 0);
+  const now = new Date().toISOString();
+  insertFirewall({
+    id,
+    name,
+    host,
+    port,
+    api_token: apiToken,
+    verify_ssl: verifySsl ? 1 : 0,
+    created_at: now,
+    updated_at: now,
+  });
 
   res.status(201).json({
     id,
@@ -69,8 +81,7 @@ router.post("/", async (req: Request, res: Response) => {
 
 // PUT /api/firewalls/:id - Update a firewall
 router.put("/:id", async (req: Request, res: Response) => {
-  const db = getDb();
-  const existing = db.prepare("SELECT * FROM firewalls WHERE id = ?").get(req.params.id) as FirewallRecord | undefined;
+  const existing = getFirewallById(req.params.id);
   if (!existing) return res.status(404).json({ error: "Firewall not found" });
 
   const { name, host, port, apiToken, verifySsl } = req.body;
@@ -95,9 +106,14 @@ router.put("/:id", async (req: Request, res: Response) => {
     return res.status(400).json({ error: test.message });
   }
 
-  db.prepare(
-    `UPDATE firewalls SET name=?, host=?, port=?, api_token=?, verify_ssl=?, updated_at=datetime('now') WHERE id=?`
-  ).run(updatedName, updatedHost, updatedPort, updatedToken, updatedSsl, req.params.id);
+  updateFirewallRecord(req.params.id, {
+    name: updatedName,
+    host: updatedHost,
+    port: updatedPort,
+    api_token: updatedToken,
+    verify_ssl: updatedSsl,
+    updated_at: new Date().toISOString(),
+  });
 
   cache.invalidateFirewall(req.params.id);
 
@@ -106,17 +122,15 @@ router.put("/:id", async (req: Request, res: Response) => {
 
 // DELETE /api/firewalls/:id - Remove a firewall
 router.delete("/:id", (req: Request, res: Response) => {
-  const db = getDb();
-  const result = db.prepare("DELETE FROM firewalls WHERE id = ?").run(req.params.id);
-  if (result.changes === 0) return res.status(404).json({ error: "Firewall not found" });
+  const deleted = deleteFirewallRecord(req.params.id);
+  if (!deleted) return res.status(404).json({ error: "Firewall not found" });
   cache.invalidateFirewall(req.params.id);
   res.json({ success: true });
 });
 
 // POST /api/firewalls/:id/test - Test connection
 router.post("/:id/test", async (req: Request, res: Response) => {
-  const db = getDb();
-  const fw = db.prepare("SELECT * FROM firewalls WHERE id = ?").get(req.params.id) as FirewallRecord | undefined;
+  const fw = getFirewallById(req.params.id);
   if (!fw) return res.status(404).json({ error: "Firewall not found" });
 
   const client = new FortiGateClient(

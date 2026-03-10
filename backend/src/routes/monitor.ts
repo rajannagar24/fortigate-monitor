@@ -4,17 +4,14 @@
  */
 
 import { Router, Request, Response } from "express";
-import { getDb, FirewallRecord } from "../database";
+import { getFirewallById } from "../database";
 import { FortiGateClient } from "../services/fortigate";
 
 const router = Router();
 
 /** Helper: get FortiGateClient for a firewall ID */
 function getClient(firewallId: string): FortiGateClient | null {
-  const db = getDb();
-  const fw = db
-    .prepare("SELECT * FROM firewalls WHERE id = ?")
-    .get(firewallId) as FirewallRecord | undefined;
+  const fw = getFirewallById(firewallId);
   if (!fw) return null;
 
   return new FortiGateClient(
