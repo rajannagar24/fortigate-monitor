@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import {
   Cpu,
   HardDrive,
@@ -9,6 +9,7 @@ import {
   Clock,
   Server,
   RefreshCw,
+  LogIn,
 } from "lucide-react";
 import {
   LineChart,
@@ -28,10 +29,12 @@ import type { DashboardOverview, ResourceHistory } from "../types";
 
 export default function Dashboard() {
   const { firewallId } = useParams<{ firewallId: string }>();
+  const navigate = useNavigate();
   const [data, setData] = useState<DashboardOverview | null>(null);
   const [history, setHistory] = useState<ResourceHistory[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [sessionExpired, setSessionExpired] = useState(false);
   const intervalRef = useRef<number>();
 
   const fetchData = async () => {
@@ -40,6 +43,7 @@ export default function Dashboard() {
       const result = await getOverview(firewallId);
       setData(result);
       setError("");
+      setSessionExpired(false);
 
       // Append to history (keep last 60 points ≈ 10 min at 10s interval)
       setHistory((prev) => {
@@ -55,7 +59,13 @@ export default function Dashboard() {
         return next.slice(-60);
       });
     } catch (err: any) {
-      setError(err.response?.data?.error || err.message);
+      const status = err.response?.status;
+      const msg = err.response?.data?.error || err.message;
+      if (status === 401) {
+        setSessionExpired(true);
+        clearInterval(intervalRef.current);
+      }
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -85,6 +95,24 @@ export default function Dashboard() {
     return (
       <div className="flex items-center justify-center h-64">
         <RefreshCw className="w-8 h-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
+  if (sessionExpired) {
+    return (
+      <div className="max-w-md mx-auto mt-16 p-8 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl text-center">
+        <LogIn className="w-12 h-12 text-amber-500 mx-auto mb-4" />
+        <h2 className="text-xl font-bold mb-2">Session Expired</h2>
+        <p className="text-gray-500 dark:text-gray-400 mb-6">
+          Your FortiGate session has expired. Please log in again to continue monitoring.
+        </p>
+        <button
+          onClick={() => navigate("/")}
+          className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+        >
+          Go to Firewalls &amp; Log In
+        </button>
       </div>
     );
   }

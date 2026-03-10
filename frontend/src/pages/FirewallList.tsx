@@ -1,15 +1,17 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Trash2, RefreshCw, Wifi, WifiOff } from "lucide-react";
-import { getFirewalls, addFirewall, deleteFirewall, testFirewall } from "../services/api";
+import { Plus, Trash2, LogIn, LogOut, Shield, ShieldOff } from "lucide-react";
+import { getFirewalls, addFirewall, deleteFirewall, loginFirewall, logoutFirewall } from "../services/api";
 import AddFirewallModal from "../components/AddFirewallModal";
+import LoginModal from "../components/LoginModal";
 import type { Firewall } from "../types";
 
 export default function FirewallList() {
   const [firewalls, setFirewalls] = useState<Firewall[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
-  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; message: string }>>({});
+  const [loginTarget, setLoginTarget] = useState<Firewall | null>(null);
+  const [statusMessages, setStatusMessages] = useState<Record<string, { ok: boolean; message: string }>>({});
   const navigate = useNavigate();
 
   const fetchFirewalls = async () => {
@@ -26,13 +28,15 @@ export default function FirewallList() {
 
   useEffect(() => {
     fetchFirewalls();
+    // Refresh auth status every 30 seconds
+    const interval = setInterval(fetchFirewalls, 30_000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleAdd = async (data: {
     name: string;
     host: string;
     port: number;
-    apiToken: string;
     verifySsl: boolean;
   }) => {
     await addFirewall(data);
@@ -45,17 +49,20 @@ export default function FirewallList() {
     await fetchFirewalls();
   };
 
-  const handleTest = async (id: string) => {
-    setTestResults((prev) => ({ ...prev, [id]: { ok: false, message: "Testing..." } }));
-    try {
-      const result = await testFirewall(id);
-      setTestResults((prev) => ({ ...prev, [id]: result }));
-    } catch {
-      setTestResults((prev) => ({
-        ...prev,
-        [id]: { ok: false, message: "Test request failed" },
-      }));
+  const handleLogin = async (fw: Firewall, credentials: { username: string; password: string }) => {
+    const result = await loginFirewall(fw.id, credentials);
+    if (result.ok) {
+      setStatusMessages((prev) => ({ ...prev, [fw.id]: { ok: true, message: result.message } }));
+      await fetchFirewalls();
+    } else {
+      throw new Error(result.message);
     }
+  };
+
+  const handleLogout = async (fw: Firewall) => {
+    await logoutFirewall(fw.id);
+    setStatusMessages((prev) => ({ ...prev, [fw.id]: { ok: false, message: "Logged out" } }));
+    await fetchFirewalls();
   };
 
   return (
@@ -102,43 +109,66 @@ export default function FirewallList() {
               <div className="flex items-center justify-between">
                 <div
                   className="flex-1 cursor-pointer"
-                  onClick={() => navigate(`/dashboard/${fw.id}`)}
+                  onClick={() => fw.authenticated ? navigate(`/dashboard/${fw.id}`) : setLoginTarget(fw)}
                 >
-                  <h3 className="text-lg font-bold">{fw.name}</h3>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                  <div className="flex items-center gap-2">
+                    {fw.authenticated ? (
+                      <Shield className="w-5 h-5 text-green-500" />
+                    ) : (
+                      <ShieldOff className="w-5 h-5 text-gray-400" />
+                    )}
+                    <h3 className="text-lg font-bold">{fw.name}</h3>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                        fw.authenticated
+                          ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
+                          : "bg-gray-100 dark:bg-gray-800 text-gray-500"
+                      }`}
+                    >
+                      {fw.authenticated ? "Authenticated" : "Not logged in"}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 ml-7">
                     {fw.host}:{fw.port}
                   </p>
-                  {testResults[fw.id] && (
+                  {statusMessages[fw.id] && (
                     <p
-                      className={`text-xs mt-1 ${
-                        testResults[fw.id].ok
+                      className={`text-xs mt-1 ml-7 ${
+                        statusMessages[fw.id].ok
                           ? "text-green-600 dark:text-green-400"
                           : "text-red-500"
                       }`}
                     >
-                      {testResults[fw.id].ok ? (
-                        <Wifi className="w-3 h-3 inline mr-1" />
-                      ) : (
-                        <WifiOff className="w-3 h-3 inline mr-1" />
-                      )}
-                      {testResults[fw.id].message}
+                      {statusMessages[fw.id].message}
                     </p>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleTest(fw.id)}
-                    className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500"
-                    title="Test Connection"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => navigate(`/dashboard/${fw.id}`)}
-                    className="px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
-                  >
-                    Open Dashboard
-                  </button>
+                  {fw.authenticated ? (
+                    <>
+                      <button
+                        onClick={() => navigate(`/dashboard/${fw.id}`)}
+                        className="px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+                      >
+                        Open Dashboard
+                      </button>
+                      <button
+                        onClick={() => handleLogout(fw)}
+                        className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500"
+                        title="Logout"
+                      >
+                        <LogOut className="w-4 h-4" />
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => setLoginTarget(fw)}
+                      className="flex items-center gap-2 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium"
+                    >
+                      <LogIn className="w-4 h-4" />
+                      Log In
+                    </button>
+                  )}
                   <button
                     onClick={() => handleDelete(fw.id)}
                     className="p-2 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500"
@@ -158,6 +188,15 @@ export default function FirewallList() {
         onClose={() => setModalOpen(false)}
         onAdd={handleAdd}
       />
+
+      {loginTarget && (
+        <LoginModal
+          open={!!loginTarget}
+          firewallName={loginTarget.name}
+          onClose={() => setLoginTarget(null)}
+          onLogin={(creds) => handleLogin(loginTarget, creds)}
+        />
+      )}
     </div>
   );
 }

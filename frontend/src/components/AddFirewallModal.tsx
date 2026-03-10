@@ -8,7 +8,6 @@ interface AddFirewallModalProps {
     name: string;
     host: string;
     port: number;
-    apiToken: string;
     verifySsl: boolean;
   }) => Promise<void>;
 }
@@ -21,7 +20,6 @@ export default function AddFirewallModal({
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState(443);
-  const [apiToken, setApiToken] = useState("");
   const [verifySsl, setVerifySsl] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -33,11 +31,10 @@ export default function AddFirewallModal({
     setError("");
     setLoading(true);
     try {
-      await onAdd({ name, host, port, apiToken, verifySsl });
+      await onAdd({ name, host, port, verifySsl });
       setName("");
       setHost("");
       setPort(443);
-      setApiToken("");
       setVerifySsl(false);
       onClose();
     } catch (err: any) {
@@ -106,21 +103,6 @@ export default function AddFirewallModal({
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium mb-1">API Token</label>
-            <input
-              type="password"
-              value={apiToken}
-              onChange={(e) => setApiToken(e.target.value)}
-              placeholder="Enter FortiGate REST API token"
-              required
-              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500 outline-none font-mono"
-            />
-            <p className="text-xs text-gray-400 mt-1">
-              Generate at: System → Administrators → REST API Admin
-            </p>
-          </div>
-
           <div className="flex items-center gap-2">
             <input
               type="checkbox"
@@ -133,6 +115,10 @@ export default function AddFirewallModal({
               Verify SSL certificate (disable for self-signed certs)
             </label>
           </div>
+
+          <p className="text-xs text-gray-400">
+            After adding, you'll log in with your FortiGate username &amp; password.
+          </p>
 
           <div className="flex gap-3 pt-2">
             <button
@@ -147,7 +133,7 @@ export default function AddFirewallModal({
               disabled={loading}
               className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-medium disabled:opacity-50"
             >
-              {loading ? "Connecting..." : "Add Firewall"}
+              {loading ? "Adding..." : "Add Firewall"}
             </button>
           </div>
         </form>

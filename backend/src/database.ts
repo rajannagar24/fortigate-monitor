@@ -1,6 +1,7 @@
 /**
  * Simple JSON file-based database.
- * No native dependencies — works everywhere Node.js runs.
+ * Stores firewall connection configs (host, port, name) — NOT credentials.
+ * Credentials are entered each session by the user.
  */
 
 import fs from "fs";
@@ -13,7 +14,6 @@ export interface FirewallRecord {
   name: string;
   host: string;
   port: number;
-  api_token: string;
   verify_ssl: number;
   created_at: string;
   updated_at: string;

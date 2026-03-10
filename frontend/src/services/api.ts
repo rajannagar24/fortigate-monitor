@@ -27,9 +27,8 @@ export async function addFirewall(payload: {
   name: string;
   host: string;
   port: number;
-  apiToken: string;
   verifySsl: boolean;
-}): Promise<Firewall & { connectionMessage: string }> {
+}): Promise<Firewall> {
   const { data } = await api.post("/firewalls", payload);
   return data;
 }
@@ -40,7 +39,6 @@ export async function updateFirewall(
     name: string;
     host: string;
     port: number;
-    apiToken: string;
     verifySsl: boolean;
   }>
 ): Promise<any> {
@@ -52,10 +50,27 @@ export async function deleteFirewall(id: string): Promise<void> {
   await api.delete(`/firewalls/${id}`);
 }
 
-export async function testFirewall(
+// ─── Authentication ─────────────────────────────────────────
+
+export async function loginFirewall(
+  id: string,
+  credentials: { username: string; password: string }
+): Promise<{ ok: boolean; message: string }> {
+  const { data } = await api.post(`/firewalls/${id}/login`, credentials);
+  return data;
+}
+
+export async function logoutFirewall(
   id: string
 ): Promise<{ ok: boolean; message: string }> {
-  const { data } = await api.post(`/firewalls/${id}/test`);
+  const { data } = await api.post(`/firewalls/${id}/logout`);
+  return data;
+}
+
+export async function getSessionStatus(
+  id: string
+): Promise<{ authenticated: boolean; expiresAt: number | null; remainingMs: number }> {
+  const { data } = await api.get(`/firewalls/${id}/session`);
   return data;
 }
 

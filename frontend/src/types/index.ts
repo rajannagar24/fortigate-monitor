@@ -6,7 +6,7 @@ export interface Firewall {
   host: string;
   port: number;
   verify_ssl: number;
-  hasToken: boolean;
+  authenticated: boolean;
   created_at: string;
   updated_at: string;
 }

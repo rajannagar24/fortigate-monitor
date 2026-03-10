@@ -1,6 +1,7 @@
 /**
- * Firewall CRUD routes.
- * Manages FortiGate devices in a local JSON file database.
+ * Firewall CRUD + Authentication routes.
+ * Firewalls are saved (host/port/name) but credentials are NOT stored.
+ * Users must log in each session with their FortiGate username + password.
  */
 
 import { Router, Request, Response } from "express";
@@ -11,48 +12,41 @@ import {
   insertFirewall,
   updateFirewallRecord,
   deleteFirewallRecord,
-  FirewallRecord,
 } from "../database";
-import { FortiGateClient } from "../services/fortigate";
+import {
+  fortiLogin,
+  fortiLogout,
+  hasActiveSession,
+  getSession,
+  FortiGateClient,
+} from "../services/fortigate";
 import { cache } from "../services/cache";
 
 const router = Router();
 
-// GET /api/firewalls - List all firewalls
+// GET /api/firewalls - List all firewalls with session status
 router.get("/", (_req: Request, res: Response) => {
   const firewalls = getAllFirewalls();
-  // Never send tokens to the frontend
-  const safe = firewalls.map(({ api_token, ...fw }) => ({
+  const result = firewalls.map((fw) => ({
     ...fw,
-    hasToken: true,
+    authenticated: hasActiveSession(fw.id),
   }));
-  res.json(safe);
+  res.json(result);
 });
 
-// GET /api/firewalls/:id - Get single firewall
+// GET /api/firewalls/:id - Get single firewall with session status
 router.get("/:id", (req: Request, res: Response) => {
   const fw = getFirewallById(req.params.id);
   if (!fw) return res.status(404).json({ error: "Firewall not found" });
-  const { api_token, ...safe } = fw;
-  res.json({ ...safe, hasToken: true });
+  res.json({ ...fw, authenticated: hasActiveSession(fw.id) });
 });
 
-// POST /api/firewalls - Add a new firewall
+// POST /api/firewalls - Add a new firewall (just saves host/port/name, no auth)
 router.post("/", async (req: Request, res: Response) => {
-  const { name, host, port = 443, apiToken, verifySsl = false } = req.body;
+  const { name, host, port = 443, verifySsl = false } = req.body;
 
-  if (!name || !host || !apiToken) {
-    return res.status(400).json({ error: "name, host, and apiToken are required" });
-  }
-
-  // Test connection first
-  const client = new FortiGateClient(
-    { host, port, apiToken, verifySsl },
-    "test"
-  );
-  const test = await client.testConnection();
-  if (!test.ok) {
-    return res.status(400).json({ error: test.message });
+  if (!name || !host) {
+    return res.status(400).json({ error: "name and host are required" });
   }
 
   const id = uuidv4();
@@ -62,7 +56,6 @@ router.post("/", async (req: Request, res: Response) => {
     name,
     host,
     port,
-    api_token: apiToken,
     verify_ssl: verifySsl ? 1 : 0,
     created_at: now,
     updated_at: now,
@@ -74,76 +67,110 @@ router.post("/", async (req: Request, res: Response) => {
     host,
     port,
     verify_ssl: verifySsl ? 1 : 0,
-    hasToken: true,
-    connectionMessage: test.message,
+    authenticated: false,
+    created_at: now,
+    updated_at: now,
   });
 });
 
-// PUT /api/firewalls/:id - Update a firewall
+// PUT /api/firewalls/:id - Update firewall connection details
 router.put("/:id", async (req: Request, res: Response) => {
   const existing = getFirewallById(req.params.id);
   if (!existing) return res.status(404).json({ error: "Firewall not found" });
 
-  const { name, host, port, apiToken, verifySsl } = req.body;
-  const updatedName = name ?? existing.name;
-  const updatedHost = host ?? existing.host;
-  const updatedPort = port ?? existing.port;
-  const updatedToken = apiToken ?? existing.api_token;
-  const updatedSsl = verifySsl !== undefined ? (verifySsl ? 1 : 0) : existing.verify_ssl;
-
-  // Test new connection
-  const client = new FortiGateClient(
-    {
-      host: updatedHost,
-      port: updatedPort,
-      apiToken: updatedToken,
-      verifySsl: updatedSsl === 1,
-    },
-    req.params.id
-  );
-  const test = await client.testConnection();
-  if (!test.ok) {
-    return res.status(400).json({ error: test.message });
-  }
+  const { name, host, port, verifySsl } = req.body;
 
   updateFirewallRecord(req.params.id, {
-    name: updatedName,
-    host: updatedHost,
-    port: updatedPort,
-    api_token: updatedToken,
-    verify_ssl: updatedSsl,
+    name: name ?? existing.name,
+    host: host ?? existing.host,
+    port: port ?? existing.port,
+    verify_ssl: verifySsl !== undefined ? (verifySsl ? 1 : 0) : existing.verify_ssl,
     updated_at: new Date().toISOString(),
   });
 
   cache.invalidateFirewall(req.params.id);
-
-  res.json({ id: req.params.id, name: updatedName, host: updatedHost, port: updatedPort, connectionMessage: test.message });
+  const updated = getFirewallById(req.params.id)!;
+  res.json({ ...updated, authenticated: hasActiveSession(req.params.id) });
 });
 
 // DELETE /api/firewalls/:id - Remove a firewall
-router.delete("/:id", (req: Request, res: Response) => {
+router.delete("/:id", async (req: Request, res: Response) => {
+  const fw = getFirewallById(req.params.id);
+  if (fw) {
+    // Logout from FortiGate if session is active
+    await fortiLogout({ host: fw.host, port: fw.port, verifySsl: fw.verify_ssl === 1 }, fw.id);
+  }
   const deleted = deleteFirewallRecord(req.params.id);
   if (!deleted) return res.status(404).json({ error: "Firewall not found" });
   cache.invalidateFirewall(req.params.id);
   res.json({ success: true });
 });
 
-// POST /api/firewalls/:id/test - Test connection
-router.post("/:id/test", async (req: Request, res: Response) => {
+// ─── Authentication ────────────────────────────────────────
+
+// POST /api/firewalls/:id/login - Authenticate to a firewall
+router.post("/:id/login", async (req: Request, res: Response) => {
   const fw = getFirewallById(req.params.id);
   if (!fw) return res.status(404).json({ error: "Firewall not found" });
 
-  const client = new FortiGateClient(
-    {
-      host: fw.host,
-      port: fw.port,
-      apiToken: fw.api_token,
-      verifySsl: fw.verify_ssl === 1,
-    },
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ ok: false, message: "Username and password are required" });
+  }
+
+  const result = await fortiLogin(
+    { host: fw.host, port: fw.port, verifySsl: fw.verify_ssl === 1 },
+    { username, password },
     fw.id
   );
-  const test = await client.testConnection();
-  res.json(test);
+
+  if (result.ok) {
+    res.json({ ok: true, message: result.message });
+  } else {
+    res.status(401).json({ ok: false, message: result.message });
+  }
+});
+
+// POST /api/firewalls/:id/logout - End session
+router.post("/:id/logout", async (req: Request, res: Response) => {
+  const fw = getFirewallById(req.params.id);
+  if (!fw) return res.status(404).json({ error: "Firewall not found" });
+
+  await fortiLogout(
+    { host: fw.host, port: fw.port, verifySsl: fw.verify_ssl === 1 },
+    fw.id
+  );
+  cache.invalidateFirewall(fw.id);
+  res.json({ ok: true, message: "Logged out" });
+});
+
+// GET /api/firewalls/:id/session - Check session status
+router.get("/:id/session", (req: Request, res: Response) => {
+  const fw = getFirewallById(req.params.id);
+  if (!fw) return res.status(404).json({ error: "Firewall not found" });
+
+  const session = getSession(fw.id);
+  res.json({
+    authenticated: !!session,
+    expiresAt: session?.expiresAt || null,
+    remainingMs: session ? Math.max(0, session.expiresAt - Date.now()) : 0,
+  });
+});
+
+// POST /api/firewalls/quick-login - Test login without saving firewall
+router.post("/quick-login", async (req: Request, res: Response) => {
+  const { host, port = 443, username, password, verifySsl = false } = req.body;
+  if (!host || !username || !password) {
+    return res.status(400).json({ ok: false, message: "host, username, and password are required" });
+  }
+
+  const result = await fortiLogin(
+    { host, port, verifySsl },
+    { username, password },
+    "quicktest"
+  );
+
+  res.json({ ok: result.ok, message: result.message });
 });
 
 export default router;
